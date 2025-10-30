@@ -67,3 +67,51 @@ The final LangGraph workflow would look like a simple but robust loop:
 4.  **C. $\text{GenerateNode}$** $\rightarrow$ **END**
 
 This LangGraph structure explicitly defines the ReAct loop: the LLM in $\text{ParseNode}$ has the capability to **Reason** and trigger an **Act** (tool call), and the loop structure ensures it receives the **Observation** (tool output) and continues to **Reason** until it reaches the final output path. This is a perfect first project for controllable agentic design!
+
+---
+
+## 📋 GitHub Spec Kit - Spec-Driven Development
+
+### Overview
+
+GitHub Spec Kit is a toolkit for **Spec-Driven Development (SDD)** that helps structure AI-powered development workflows. Instead of "vibe coding," it enables teams to outline concrete project requirements, motivations, and technical aspects before implementation.
+
+**Repository**: `github/spec-kit`
+**Installation**: `uvx --from git+https://github.com/github/spec-kit.git specify init <PROJECT_NAME>`
+
+### Core Workflow Commands
+
+Use these slash commands in sequence for spec-driven development:
+
+#### 1. Primary Commands (Sequential Flow)
+
+| Command | Purpose | When to Use |
+| :--- | :--- | :--- |
+| `/speckit.constitution` | Establish project principles | First step - Define core values and constraints |
+| `/speckit.specify` | Create baseline specification | After constitution - Document requirements and scope |
+| `/speckit.plan` | Create implementation plan | After specification - Design technical approach |
+| `/speckit.tasks` | Generate actionable tasks | After planning - Break down into concrete steps |
+| `/speckit.implement` | Execute implementation | Final step - Build according to plan |
+
+#### 2. Enhancement Commands (Optional)
+
+| Command | Purpose | When to Use |
+| :--- | :--- | :--- |
+| `/speckit.clarify` | Ask structured questions to de-risk ambiguous areas | Before `/speckit.plan` - Resolve uncertainties |
+| `/speckit.checklist` | Generate quality checklists for requirements validation | After `/speckit.plan` - Verify completeness |
+| `/speckit.analyze` | Cross-artifact consistency & alignment report | After `/speckit.tasks`, before `/speckit.implement` |
+
+### Project Structure
+
+```
+project/
+├── .claude/              # Agent configuration (add to .gitignore)
+├── constitution.md       # Project principles and values
+├── specification.md      # Detailed requirements
+├── plan.md              # Technical implementation plan
+└── tasks.md             # Actionable task breakdown
+```
+
+### Security Note
+
+The `.claude/` directory may contain credentials, auth tokens, or identifying artifacts. Always add it to `.gitignore` to prevent credential leakage.
