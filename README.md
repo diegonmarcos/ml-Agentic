@@ -1,0 +1,105 @@
+# Multi-Agent RAG Workflow Orchestrator
+
+This repository contains the specifications and plans for a **Multi-Agent Retrieval-Augmented Generation (RAG) Workflow Orchestrator**. The project leverages `n8n` for visual workflow orchestration, `Ollama` for local Large Language Model (LLM) inference, and `Qdrant` as a vector database for efficient semantic search.
+
+The goal is to create a robust, observable, and cost-effective system that enables natural language querying over extensive document knowledge bases, providing accurate answers with source citations.
+
+## 🌟 Core Principles (Project Constitution)
+
+The development of this orchestrator adheres to the following non-negotiable principles:
+
+1.  **Visual-First Design**: All agentic workflows are designed to be visually representable in n8n, ensuring clarity, intuitive debugging, and accessibility for both technical and non-technical stakeholders.
+2.  **LLM-Agnostic Architecture**: The system supports multiple LLM providers interchangeably (Ollama, Anthropic, OpenAI), abstracting LLM calls and enabling cost optimization, vendor lock-in avoidance, and offline capabilities.
+3.  **Fail-Safe Operations**: Robust error handling, automatic retries with exponential backoff, and graceful degradation are implemented for every LLM call, tool execution, and data retrieval to ensure system resilience.
+4.  **Cost-Conscious Design**: Token usage and API costs are actively managed through monitoring, prompt optimization, caching, and prioritizing local Ollama inference.
+5.  **Observable Agent Flows**: Every step of the agent workflow is traceable and debuggable with structured logging, capture of LLM prompts/responses, RAG retrieval details, and comprehensive execution metrics.
+
+## ✨ Features
+
+The Multi-Agent RAG Workflow Orchestrator provides the following key functionalities:
+
+*   **Document Knowledge Base Query (P1)**: Users can submit natural language questions via webhook and receive accurate, cited answers from the knowledge base.
+*   **Document Ingestion and Indexing (P1)**: System administrators can upload documents (PDF, Markdown, TXT) for automatic processing, chunking, embedding, and indexing into the vector database.
+*   **Multi-Agent Workflow with Tool Calling (P2)**: Agents can perform multi-step reasoning, deciding whether to retrieve additional context, call external tools (e.g., Google Search), or generate final responses.
+*   **LLM Provider Fallback Chain (P3)**: Automatic failover to cloud LLM providers (Anthropic, OpenAI) if the primary local Ollama service is unavailable or slow.
+*   **Observable Workflow Execution (P3)**: Administrators gain detailed insights into workflow executions, including LLM prompts, retrieved chunks, token usage, and error traces.
+
+## 🏗️ Architecture
+
+The system is built upon a modern, containerized stack:
+
+*   **Orchestration**: `n8n` (v1.x, self-hosted via Docker) for visual workflow design and execution.
+*   **LLM Inference**: `Ollama` (latest) for running local LLMs (e.g., `llama3.1:8b` for generation, `nomic-embed-text` for embeddings).
+*   **Vector Database**: `Qdrant` (v1.7+, self-hosted via Docker) for efficient storage and retrieval of document embeddings.
+*   **Queue Management**: `Redis` (v7.x) to support n8n's queue mode for concurrent workflow execution.
+*   **Deployment**: `Docker Compose` (v2.x) for easy setup and management of the multi-container environment.
+
+### Key Architectural Decisions:
+
+*   **Visual-First Approach**: All agent logic is implemented as n8n node configurations, minimizing custom code and maximizing visual clarity.
+*   **Explicit State Management**: Agent state is passed explicitly between n8n nodes using JSON objects, avoiding hidden global states.
+*   **Robust Error Handling**: Native n8n retry logic, error branches, and timeouts are configured for all external API calls.
+*   **Cost Optimization**: Prioritization of local Ollama inference, query caching, and token usage tracking.
+
+## 🚀 Getting Started
+
+To set up and run the Multi-Agent RAG Workflow Orchestrator locally, follow these high-level steps:
+
+1.  **Clone the Repository**:
+    ```bash
+    git clone https://github.com/your-org/your-repo.git
+    cd your-repo
+    ```
+2.  **Prepare Environment**:
+    *   Ensure Docker and Docker Compose are installed.
+    *   Create a `.env` file based on `.env.example` and configure necessary API keys (for Anthropic/OpenAI fallbacks) and URLs.
+3.  **Start Services**:
+    ```bash
+    docker-compose up -d
+    ```
+    This will launch n8n, Ollama, Qdrant, and Redis containers.
+4.  **Pull Ollama Models**:
+    ```bash
+    ollama pull llama3.1:8b
+    ollama pull nomic-embed-text
+    ```
+5.  **Initialize Qdrant Collection**:
+    Run the provided script to create the `knowledge_base` collection in Qdrant:
+    ```bash
+    ./scripts/setup-qdrant-collection.sh
+    ```
+6.  **Import n8n Workflows**:
+    Import the pre-defined n8n workflows from the `workflows/` directory into your n8n instance (accessible at `http://localhost:5678`).
+    ```bash
+    ./scripts/import-workflows.sh
+    ```
+7.  **Configure Credentials**:
+    Within n8n, configure your Anthropic and OpenAI API keys in the Credentials section.
+8.  **Test Document Ingestion**:
+    Trigger the `Document Ingestion` workflow in n8n to process sample documents from `test-data/sample-documents/` and index them into Qdrant.
+9.  **Test Query Processing**:
+    Use the webhook endpoint for the `Query Processing` workflow to submit natural language queries and receive answers.
+
+For detailed instructions, refer to `docs/quickstart.md` (to be created).
+
+## ⚙️ Workflows
+
+The project is structured around several key n8n workflows:
+
+*   **Document Ingestion (`001-document-ingestion.json`)**: Handles reading documents, text extraction, chunking, embedding generation via Ollama, and insertion into Qdrant.
+*   **Query Processing (`002-query-processing.json`)**: Receives user queries, generates embeddings, performs semantic search in Qdrant, augments LLM prompts, and generates answers using Ollama.
+*   **Multi-Agent Orchestration (`003-multi-agent-orchestration.json`)**: Implements the ReAct pattern, allowing agents to decide on tool usage (e.g., Google Search) and iterate for complex reasoning.
+*   **Provider Fallback (`004-provider-fallback.json`)**: Manages the LLM provider chain, automatically switching from Ollama to Anthropic or OpenAI in case of failures or timeouts.
+*   **Metrics Aggregation (`005-metrics-aggregation.json`)**: A scheduled workflow that fetches n8n execution logs, extracts metrics (latency, token usage, status), and exports them for observability.
+
+## 📋 Spec-Driven Development
+
+This project follows a **Spec-Driven Development (SDD)** approach, utilizing the GitHub Spec Kit. This methodology ensures that requirements, motivations, and technical aspects are clearly outlined before implementation. Key artifacts include:
+
+*   **Constitution (`0.constitution.md`)**: Defines core project principles and values.
+*   **Specification (`01-spec.md`)**: Details functional and non-functional requirements, user stories, and acceptance criteria.
+*   **Plan (`02-plan.md`)**: Outlines the technical implementation strategy, architecture decisions, and technology stack.
+*   **Research (`03-research.md`)**: Documents technology research, decisions, and rationale.
+*   **Tasks (`04-tasks.md`)**: Breaks down the implementation into actionable, prioritized tasks.
+
+
