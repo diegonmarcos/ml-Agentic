@@ -1,0 +1,50 @@
+{
+  "server": {
+    "name": "mcp-filesystem",
+    "version": "1.0.0",
+    "description": "Sandboxed filesystem access for privacy mode"
+  },
+  "security": {
+    "allowed_directories": [
+      "/data/projects",
+      "/data/shared",
+      "/data/temp"
+    ],
+    "forbidden_patterns": [
+      "**/.git/**",
+      "**/.env",
+      "**/credentials.json",
+      "**/.ssh/**",
+      "**/secrets/**"
+    ],
+    "max_file_size_mb": 100,
+    "max_files_per_operation": 1000
+  },
+  "operations": {
+    "read_file": {
+      "enabled": true,
+      "rate_limit_per_minute": 100
+    },
+    "write_file": {
+      "enabled": true,
+      "rate_limit_per_minute": 50
+    },
+    "list_directory": {
+      "enabled": true,
+      "rate_limit_per_minute": 200
+    },
+    "search_files": {
+      "enabled": true,
+      "rate_limit_per_minute": 50
+    },
+    "delete_file": {
+      "enabled": false,
+      "requires_confirmation": true
+    }
+  },
+  "logging": {
+    "level": "info",
+    "audit_enabled": true,
+    "log_file_operations": true
+  }
+}
