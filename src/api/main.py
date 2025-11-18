@@ -17,6 +17,8 @@ import logging
 import time
 
 from .budget import router as budget_router
+from .health import router as health_router
+from ..utils.shutdown import shutdown_manager, ShutdownPhase
 
 
 # Configure logging
@@ -31,17 +33,52 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Startup and shutdown logic.
+    Startup and shutdown logic with graceful shutdown support (TASK-045).
     """
     # Startup
-    logger.info("Starting Multi-Agent RAG Orchestrator API v4.2")
+    logger.info("="*70)
+    logger.info("  Starting Multi-Agent RAG Orchestrator API v4.2")
+    logger.info("="*70)
     logger.info("Budget API: /api/v1/budget")
+    logger.info("Health API: /health")
     logger.info("Documentation: /docs")
+
+    # Setup signal handlers for graceful shutdown
+    await shutdown_manager.setup_signal_handlers()
+
+    # Register shutdown hooks
+    # Example hooks - in production, register actual resource cleanup
+    shutdown_manager.register(
+        name="Stop background tasks",
+        phase=ShutdownPhase.STOP_BACKGROUND,
+        callback=lambda: logger.info("Background tasks stopped"),
+        critical=False
+    )
+
+    shutdown_manager.register(
+        name="Close database connections",
+        phase=ShutdownPhase.CLOSE_CONNECTIONS,
+        callback=lambda: logger.info("Database connections closed"),
+        critical=True
+    )
+
+    shutdown_manager.register(
+        name="Final cleanup",
+        phase=ShutdownPhase.CLEANUP,
+        callback=lambda: logger.info("Cleanup complete"),
+        critical=False
+    )
+
+    logger.info("Graceful shutdown hooks registered")
+    logger.info("API ready to serve requests")
+    logger.info("="*70)
 
     yield
 
-    # Shutdown
-    logger.info("Shutting down API")
+    # Shutdown - execute graceful shutdown
+    logger.info("Initiating shutdown sequence...")
+    await shutdown_manager.shutdown()
+    logger.info("API shutdown complete")
 
 
 # Create FastAPI app
@@ -85,6 +122,7 @@ async def log_requests(request: Request, call_next):
 
 # Include routers
 app.include_router(budget_router)
+app.include_router(health_router)
 
 
 # Root endpoint
@@ -98,7 +136,10 @@ async def root():
         "endpoints": {
             "documentation": "/docs",
             "budget": "/api/v1/budget",
-            "health": "/health"
+            "health": "/health",
+            "liveness": "/health/live",
+            "readiness": "/health/ready",
+            "startup": "/health/startup"
         }
     }
 
