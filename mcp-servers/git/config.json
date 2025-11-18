@@ -1,0 +1,63 @@
+{
+  "server": {
+    "name": "mcp-git",
+    "version": "1.0.0",
+    "description": "Read-only git operations for privacy mode"
+  },
+  "security": {
+    "read_only": true,
+    "allowed_repositories": [
+      "/data/repos"
+    ],
+    "forbidden_patterns": [
+      "**/.git/config",
+      "**/.git/hooks/**",
+      "**/credentials"
+    ],
+    "max_log_entries": 1000,
+    "max_diff_files": 100
+  },
+  "operations": {
+    "git_log": {
+      "enabled": true,
+      "max_commits": 1000,
+      "rate_limit_per_minute": 100
+    },
+    "git_diff": {
+      "enabled": true,
+      "max_files": 100,
+      "rate_limit_per_minute": 50
+    },
+    "git_show": {
+      "enabled": true,
+      "rate_limit_per_minute": 100
+    },
+    "git_blame": {
+      "enabled": true,
+      "rate_limit_per_minute": 50
+    },
+    "git_search": {
+      "enabled": true,
+      "max_results": 1000,
+      "rate_limit_per_minute": 50
+    },
+    "git_commit": {
+      "enabled": false,
+      "comment": "Read-only mode - commits disabled"
+    },
+    "git_push": {
+      "enabled": false,
+      "comment": "Read-only mode - push disabled"
+    }
+  },
+  "git": {
+    "default_branch": "main",
+    "enable_submodules": false,
+    "max_repo_size_gb": 5
+  },
+  "logging": {
+    "level": "info",
+    "audit_enabled": true,
+    "log_git_operations": true
+  }
+}

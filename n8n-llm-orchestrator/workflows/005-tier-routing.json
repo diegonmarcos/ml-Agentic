@@ -1,0 +1,170 @@
+{
+  "name": "005 - Tier Routing",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start-routing",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract input parameters\nconst input = $input.item.json;\nconst query = input.query || '';\nconst task_type = input.task_type || 'general';  // general | code | web | batch\nconst has_images = input.has_images || false;\nconst batch_size = input.batch_size || 1;\nconst context_tokens = input.context_tokens || 0;\nconst requires_planning = input.requires_planning || false;\nconst requires_review = input.requires_review || false;\n\nreturn [{\n  json: {\n    query: query,\n    task_type: task_type,\n    has_images: has_images,\n    batch_size: batch_size,\n    context_tokens: context_tokens,\n    requires_planning: requires_planning,\n    requires_review: requires_review,\n    phase: 'classify_complexity'\n  }\n}];\n"
+      },
+      "id": "parse-routing-request",
+      "name": "Parse Routing Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify query complexity using heuristics\nconst query = $json.query.toLowerCase();\nconst task_type = $json.task_type;\nconst requires_planning = $json.requires_planning;\nconst requires_review = $json.requires_review;\n\n// Simple classification keywords\nconst simpleKeywords = [\n  'what is', 'define', 'list', 'find', 'get', 'show',\n  'count', 'how many', 'exists', 'contains', 'search'\n];\n\nconst complexKeywords = [\n  'refactor', 'design', 'architect', 'plan', 'strategy',\n  'analyze', 'compare', 'evaluate', 'optimize', 'review'\n];\n\nconst mediumKeywords = [\n  'create', 'generate', 'write', 'implement', 'build',\n  'modify', 'update', 'add', 'remove', 'fix'\n];\n\n// Check for keyword matches\nconst hasSimple = simpleKeywords.some(kw => query.includes(kw));\nconst hasComplex = complexKeywords.some(kw => query.includes(kw));\nconst hasMedium = mediumKeywords.some(kw => query.includes(kw));\n\n// Calculate complexity score (0.0 - 1.0)\nlet complexity = 0.5;  // Default medium\n\nif (hasSimple) complexity = 0.2;\nif (hasMedium) complexity = 0.5;\nif (hasComplex) complexity = 0.8;\n\n// Adjust based on task requirements\nif (requires_planning) complexity = Math.max(complexity, 0.7);\nif (requires_review) complexity = Math.max(complexity, 0.7);\n\n// Query length factor\nif (query.length < 50) complexity -= 0.1;\nif (query.length > 200) complexity += 0.1;\n\n// Clamp to 0.0 - 1.0\ncomplexity = Math.max(0.0, Math.min(1.0, complexity));\n\nreturn [{\n  json: {\n    complexity: parseFloat(complexity.toFixed(2)),\n    has_simple: hasSimple,\n    has_medium: hasMedium,\n    has_complex: hasComplex,\n    phase: 'check_batch'\n  }\n}];\n"
+      },
+      "id": "classify-complexity",
+      "name": "Classify Query Complexity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "notes": "Heuristic complexity detection. In production, use Tier 0 LLM for classification."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if batch operation (≥50 ops)\nconst batch_size = $('Parse Routing Request').item.json.batch_size;\nconst is_batch = batch_size >= 50;\n\n// For batch operations, calculate cost comparison\nlet batch_routing = null;\n\nif (is_batch) {\n  const complexity = $json.complexity;\n  \n  // Estimate Tier 1 per-op cost\n  const tier1_cost_per_op = 0.0006;  // ~$0.60/M tokens for 1000 tokens\n  const tier1_total = batch_size * tier1_cost_per_op;\n  \n  // Estimate Tier 4 hourly cost\n  const tier4_hourly = 0.69;  // $0.69/hour\n  const ops_per_hour = 100;  // Estimate throughput\n  const hours_needed = Math.max(0.083, batch_size / ops_per_hour);  // Min 5 min\n  const tier4_total = hours_needed * tier4_hourly;\n  \n  // Use Tier 4 if it saves ≥30%\n  const use_tier4 = tier4_total < (tier1_total * 0.7);\n  \n  batch_routing = {\n    is_batch: true,\n    batch_size: batch_size,\n    tier1_cost: parseFloat(tier1_total.toFixed(4)),\n    tier4_cost: parseFloat(tier4_total.toFixed(4)),\n    use_tier4: use_tier4,\n    savings: use_tier4 ? parseFloat(((tier1_total - tier4_total) / tier1_total * 100).toFixed(1)) : 0\n  };\n}\n\nreturn [{\n  json: {\n    is_batch: is_batch,\n    batch_routing: batch_routing,\n    phase: 'check_modality'\n  }\n}];\n"
+      },
+      "id": "check-batch-routing",
+      "name": "Check Batch Routing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check for vision/multimodal requirements\nconst has_images = $('Parse Routing Request').item.json.has_images;\nconst task_type = $('Parse Routing Request').item.json.task_type;\n\n// Vision tasks route to Tier 2 (Ollama Vision)\nconst requires_vision = has_images || task_type === 'screenshot_analysis';\n\nreturn [{\n  json: {\n    requires_vision: requires_vision,\n    phase: 'select_tier'\n  }\n}];\n"
+      },
+      "id": "check-modality",
+      "name": "Check Modality",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Select appropriate tier based on all factors\nconst complexity = $('Classify Query Complexity').item.json.complexity;\nconst is_batch = $('Check Batch Routing').item.json.is_batch;\nconst batch_routing = $('Check Batch Routing').item.json.batch_routing;\nconst requires_vision = $('Check Modality').item.json.requires_vision;\nconst requires_planning = $('Parse Routing Request').item.json.requires_planning;\nconst requires_review = $('Parse Routing Request').item.json.requires_review;\n\nlet tier, model, routing_reason;\n\n// Priority 1: Vision tasks → Tier 2\nif (requires_vision) {\n  tier = 2;\n  model = 'vision';\n  routing_reason = 'Vision/multimodal content detected → Tier 2 (Ollama Vision)';\n}\n// Priority 2: Batch operations → Tier 4 if cost-effective\nelse if (is_batch && batch_routing && batch_routing.use_tier4) {\n  tier = 4;\n  model = 'batch_executor';\n  routing_reason = `Batch operation (${batch_routing.batch_size} ops) → Tier 4 (${batch_routing.savings}% savings)`;\n}\n// Priority 3: Planning/Review → Tier 3\nelse if (requires_planning || requires_review) {\n  tier = 3;\n  model = requires_planning ? 'architect' : 'reviewer';\n  routing_reason = `${requires_planning ? 'Planning' : 'Review'} required → Tier 3 (Premium)`;\n}\n// Priority 4: Complexity-based routing\nelse if (complexity < 0.3) {\n  tier = 0;\n  model = 'fast_filter';\n  routing_reason = `Low complexity (${complexity}) → Tier 0 (Local Ollama 3B-13B)`;\n}\nelse if (complexity < 0.7) {\n  tier = 1;\n  model = 'executor';\n  routing_reason = `Medium complexity (${complexity}) → Tier 1 (Fireworks/Together)`;\n}\nelse {\n  tier = 3;\n  model = 'architect';\n  routing_reason = `High complexity (${complexity}) → Tier 3 (Claude/Gemini)`;\n}\n\n// Map model names to actual model IDs\nconst modelMapping = {\n  'fast_filter': 'ollama/llama3.2:3b',\n  'executor': 'fireworks/llama-v3p1-8b-instruct',\n  'architect': 'anthropic/claude-3-5-sonnet-20241022',\n  'reviewer': 'anthropic/claude-3-5-sonnet-20241022',\n  'vision': 'ollama/llama3.2-vision:90b',\n  'batch_executor': 'runpod/meta-llama/llama-3.1-70b-instruct'\n};\n\nconst model_id = modelMapping[model] || model;\n\nreturn [{\n  json: {\n    tier: tier,\n    model: model,\n    model_id: model_id,\n    routing_reason: routing_reason,\n    complexity: complexity,\n    is_batch: is_batch,\n    requires_vision: requires_vision,\n    timestamp: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "select-tier",
+      "name": "Select Tier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build routing configuration for LiteLLM\nconst tier = $json.tier;\nconst model_id = $json.model_id;\n\n// LiteLLM endpoint mapping\nconst tierEndpoints = {\n  0: 'http://ollama:11434',\n  1: 'http://litellm:4000/v1/chat/completions',\n  2: 'http://ollama:11434',\n  3: 'http://litellm:4000/v1/chat/completions',\n  4: 'http://litellm:4000/v1/chat/completions'\n};\n\nconst endpoint = tierEndpoints[tier];\n\n// Temperature and parameter defaults by tier\nconst tierParams = {\n  0: { temperature: 0.3, max_tokens: 2000 },   // Tier 0: Deterministic, fast\n  1: { temperature: 0.5, max_tokens: 4000 },   // Tier 1: Balanced\n  2: { temperature: 0.3, max_tokens: 2000 },   // Tier 2: Vision analysis\n  3: { temperature: 0.7, max_tokens: 8000 },   // Tier 3: Creative planning\n  4: { temperature: 0.5, max_tokens: 4000 }    // Tier 4: Batch processing\n};\n\nconst params = tierParams[tier];\n\nreturn [{\n  json: {\n    routing_config: {\n      tier: tier,\n      model: model_id,\n      endpoint: endpoint,\n      temperature: params.temperature,\n      max_tokens: params.max_tokens\n    },\n    status: 'routed',\n    tier: tier,\n    model: $json.model,\n    model_id: model_id,\n    routing_reason: $json.routing_reason,\n    complexity: $json.complexity\n  }\n}];\n"
+      },
+      "id": "build-routing-config",
+      "name": "Build Routing Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Optional: Use RouteLLM for ML-based routing (advanced)\n// This node demonstrates how to integrate RouteLLM API\n// In production, uncomment and configure RouteLLM endpoint\n\nconst query = $('Parse Routing Request').item.json.query;\nconst heuristic_tier = $('Select Tier').item.json.tier;\n\n// PLACEHOLDER: RouteLLM API call\n// const routellm_response = await fetch('http://routellm:8000/route', {\n//   method: 'POST',\n//   headers: {'Content-Type': 'application/json'},\n//   body: JSON.stringify({\n//     query: query,\n//     models: ['gpt-4', 'gpt-3.5-turbo'],\n//     threshold: 0.5\n//   })\n// });\n// const routellm_result = await routellm_response.json();\n\n// For now, use heuristic result\nconst final_tier = heuristic_tier;\nconst routing_method = 'heuristic';  // or 'routellm' in production\n\nreturn [{\n  json: {\n    final_tier: final_tier,\n    routing_method: routing_method,\n    heuristic_tier: heuristic_tier,\n    // routellm_tier: routellm_result?.tier,  // Uncomment with RouteLLM\n    confidence: 0.85\n  }\n}];\n"
+      },
+      "id": "optional-routellm",
+      "name": "Optional: RouteLLM Integration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 300],
+      "notes": "Optional ML-based routing. Placeholder for RouteLLM integration."
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Parse Routing Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Routing Request": {
+      "main": [
+        [
+          {
+            "node": "Classify Query Complexity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Query Complexity": {
+      "main": [
+        [
+          {
+            "node": "Check Batch Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Batch Routing": {
+      "main": [
+        [
+          {
+            "node": "Check Modality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Modality": {
+      "main": [
+        [
+          {
+            "node": "Select Tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Tier": {
+      "main": [
+        [
+          {
+            "node": "Build Routing Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Routing Config": {
+      "main": [
+        [
+          {
+            "node": "Optional: RouteLLM Integration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-11-18T00:00:00.000Z",
+  "versionId": "1"
+}

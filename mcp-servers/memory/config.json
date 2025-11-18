@@ -1,0 +1,83 @@
+{
+  "server": {
+    "name": "mcp-memory",
+    "version": "1.0.0",
+    "description": "Encrypted context/memory storage for privacy mode"
+  },
+  "security": {
+    "encryption": {
+      "enabled": true,
+      "algorithm": "aes-256-gcm",
+      "key_rotation_days": 90
+    },
+    "access_control": {
+      "require_authentication": true,
+      "session_timeout_minutes": 30
+    },
+    "data_retention": {
+      "max_age_days": 30,
+      "auto_cleanup": true
+    }
+  },
+  "storage": {
+    "backend": "filesystem",
+    "path": "/data/memory",
+    "max_size_mb": 1000,
+    "compression": "gzip"
+  },
+  "operations": {
+    "store_memory": {
+      "enabled": true,
+      "max_size_kb": 1024,
+      "rate_limit_per_minute": 100
+    },
+    "retrieve_memory": {
+      "enabled": true,
+      "rate_limit_per_minute": 200
+    },
+    "search_memory": {
+      "enabled": true,
+      "max_results": 100,
+      "rate_limit_per_minute": 50
+    },
+    "delete_memory": {
+      "enabled": true,
+      "requires_confirmation": true,
+      "rate_limit_per_minute": 20
+    },
+    "list_memories": {
+      "enabled": true,
+      "rate_limit_per_minute": 100
+    }
+  },
+  "memory_types": {
+    "conversation": {
+      "ttl_hours": 24,
+      "max_entries": 1000
+    },
+    "facts": {
+      "ttl_days": 30,
+      "max_entries": 10000
+    },
+    "preferences": {
+      "ttl_days": 90,
+      "max_entries": 1000
+    },
+    "context": {
+      "ttl_hours": 12,
+      "max_entries": 500
+    }
+  },
+  "privacy": {
+    "pii_detection": true,
+    "pii_encryption_level": "high",
+    "audit_logging": true,
+    "gdpr_compliant": true
+  },
+  "logging": {
+    "level": "info",
+    "audit_enabled": true,
+    "log_access": true,
+    "log_encryption_keys": false
+  }
+}
