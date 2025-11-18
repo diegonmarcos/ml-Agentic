@@ -35,7 +35,7 @@ A system administrator uploads documents (PDF, Markdown, TXT) which are automati
 **Acceptance Scenarios**:
 
 1. **Given** a folder containing 50 PDF files, **When** ingestion workflow is triggered, **Then** all documents are processed and indexed within 5 minutes
-2. **Given** a document is 5000 characters long, **When** document is processed, **Then** it's split into chunks of 800±200 characters with 200-character overlap
+2. **Given** a document is 5000 characters long, **When** document is processed, **Then** it's split into chunks of 800ï¿½200 characters with 200-character overlap
 3. **Given** chunks are created, **When** embeddings are generated, **Then** each chunk includes metadata (source file, chunk ID, timestamp, page number if PDF)
 4. **Given** document already exists in Qdrant, **When** same document is re-indexed, **Then** old version is replaced (upsert operation)
 
@@ -144,28 +144,60 @@ Administrators can view detailed logs and metrics for all workflow executions, i
 
 #### LLM Provider Management
 
-- **FR-026**: System MUST support multiple LLM providers: Ollama (local), Anthropic Claude, OpenAI GPT
-- **FR-027**: System MUST allow per-workflow LLM provider configuration
-- **FR-028**: System MUST implement provider fallback chain (e.g., Ollama ’ Anthropic ’ OpenAI)
-- **FR-029**: System MUST track token usage per query and provider
-- **FR-030**: System MUST cache identical queries for 1 hour to reduce costs
+- **FR-026**: System MUST support multiple LLM providers: Ollama (local), Anthropic Claude, Google Gemini, OpenAI GPT
+- **FR-027**: System MUST route ALL LLM calls through aisuite unified interface (no direct provider calls from n8n)
+- **FR-028**: System MUST allow per-workflow LLM provider configuration via aisuite
+- **FR-029**: System MUST implement provider fallback chain via aisuite (e.g., Ollama â†’ Claude â†’ Gemini â†’ OpenAI)
+- **FR-030**: System MUST track token usage per query and provider via Helicone proxy
+- **FR-031**: System MUST cache identical queries via Helicone with 1-hour TTL to reduce costs
+- **FR-032**: aisuite service MUST expose HTTP API that n8n can call via HTTP Request nodes
+
+#### Intelligent Routing
+
+- **FR-040**: System MUST analyze query complexity using RouteLLM before model selection
+- **FR-041**: Simple queries (factual lookup, formatting) MUST route to Ollama or Gemini Flash
+- **FR-042**: Medium queries (reasoning, multi-step) MUST route to Claude 3.5 Sonnet or GPT-4
+- **FR-043**: Complex queries (advanced reasoning, coding) MUST route to Claude 3 Opus or GPT-4 Turbo
+- **FR-044**: System MUST log routing decisions with complexity scores for auditability
+- **FR-045**: Manual model override MUST be available via workflow configuration parameter
+
+#### Web Content Extraction
+
+- **FR-046**: System MUST use Firecrawl for extracting content from web URLs
+- **FR-047**: Extracted web content MUST be in LLM-friendly structured format (Markdown or JSON)
+- **FR-048**: Firecrawl MUST handle JavaScript rendering for dynamic content
+- **FR-049**: Web extraction errors MUST NOT crash workflows (fallback to simple HTTP fetch)
+- **FR-050**: Extracted content MUST include metadata: URL, title, extraction timestamp
+
+#### Vectorless RAG (Documentation)
+
+- **FR-051**: System MUST support PageIndex MCP for frequently-accessed documentation
+- **FR-052**: PageIndex MCP MUST provide keyword-based retrieval without embedding costs
+- **FR-053**: System MUST use PageIndex for API docs, technical references, and static content
+- **FR-054**: PageIndex results MUST be combined with Qdrant vector results when both available
+- **FR-055**: PageIndex failures MUST gracefully degrade to Qdrant-only retrieval
 
 #### Observability
 
-- **FR-031**: System MUST log all workflow executions with timestamps and status (success/failure)
-- **FR-032**: System MUST capture LLM prompts and responses in execution logs
-- **FR-033**: System MUST track RAG retrieval metrics: chunks retrieved, relevance scores, source documents
-- **FR-034**: System MUST retain execution logs for minimum 30 days
-- **FR-035**: System MUST expose metrics: total queries, average latency, error rate, token usage
+- **FR-033**: System MUST log all workflow executions with timestamps and status (success/failure)
+- **FR-034**: System MUST capture LLM prompts and responses in LangSmith or Langfuse
+- **FR-035**: System MUST track RAG retrieval metrics: chunks retrieved, relevance scores, source documents
+- **FR-036**: System MUST retain execution logs for minimum 30 days
+- **FR-037**: System MUST expose metrics: total queries, average latency, error rate, token usage
+- **FR-038**: System MUST implement distributed tracing with OpenTelemetry across all components
+- **FR-039**: System MUST track tool calls and errors via MCPcat for agent monitoring
 
 ### Key Entities
 
 - **Document**: Represents uploaded file; attributes include filename, file type (PDF/MD/TXT), upload timestamp, size in bytes, processing status
 - **Chunk**: Represents segmented portion of document; attributes include text content (800 chars), source document reference, chunk ID (sequential), page number (if PDF), embedding vector (768 dimensions)
-- **Query**: Represents user question; attributes include query text, timestamp, user ID (if auth implemented), embedding vector, execution ID for tracing
-- **Retrieval Result**: Represents chunks returned from vector search; attributes include chunk reference, relevance score (0.0-1.0), source document, rank position (1-5)
-- **Workflow Execution**: Represents single n8n workflow run; attributes include execution ID, start time, end time, status (success/failure/timeout), error message, token usage
-- **LLM Response**: Represents generated answer; attributes include answer text, source citations, LLM provider used, token count, generation latency
+- **Query**: Represents user question; attributes include query text, timestamp, user ID (if auth implemented), embedding vector, execution ID for tracing, complexity score (from RouteLLM)
+- **Retrieval Result**: Represents chunks returned from vector search; attributes include chunk reference, relevance score (0.0-1.0), source document, rank position (1-5), source type (Qdrant/PageIndex)
+- **Workflow Execution**: Represents single n8n workflow run; attributes include execution ID, start time, end time, status (success/failure/timeout), error message, token usage, trace ID (OpenTelemetry)
+- **LLM Response**: Represents generated answer; attributes include answer text, source citations, LLM provider used (via aisuite), token count, generation latency, cache hit (from Helicone)
+- **Routing Decision**: Represents RouteLLM model selection; attributes include query ID, complexity score, selected model, routing reason, manual override flag
+- **Web Content**: Represents extracted web page; attributes include source URL, extracted markdown, extraction method (Firecrawl/fallback), timestamp, metadata (title, author)
+- **Trace**: Represents distributed trace; attributes include trace ID, span ID, service name (n8n/aisuite/provider), duration, parent span, tags (provider, model, cost)
 
 ## Success Criteria *(mandatory)*
 
@@ -181,12 +213,19 @@ Administrators can view detailed logs and metrics for all workflow executions, i
 - **SC-008**: LLM provider fallback succeeds within 2 seconds when primary provider fails
 - **SC-009**: Token usage per query is tracked and logged with 100% accuracy
 - **SC-010**: Administrators can debug failed workflows using execution logs within 10 minutes
+- **SC-011**: RouteLLM routes 70%+ of queries to cost-optimized models (Ollama/Gemini Flash) without quality degradation
+- **SC-012**: Helicone cache hit rate is 20%+ for duplicate queries within 1-hour window
+- **SC-013**: All LLM requests trace through OpenTelemetry with complete span coverage (100%)
+- **SC-014**: Web content extraction via Firecrawl succeeds for 95%+ of tested URLs
+- **SC-015**: PageIndex MCP reduces embedding API calls by 40%+ for documentation queries
+- **SC-016**: LangSmith/Langfuse captures all prompts and responses for audit trail (100% coverage)
 
 ### Business Outcomes
 
-- **SC-011**: System reduces time to find information in documents by 70% compared to manual search
-- **SC-012**: Users complete research tasks without external search engines for 80% of queries
-- **SC-013**: Monthly LLM costs stay under $50 for up to 10,000 queries (using primarily local Ollama)
+- **SC-017**: System reduces time to find information in documents by 70% compared to manual search
+- **SC-018**: Users complete research tasks without external search engines for 80% of queries
+- **SC-019**: Monthly LLM costs stay under $50 for up to 10,000 queries via intelligent routing and caching
+- **SC-020**: Debugging time reduced by 60% with distributed tracing and visual workflow monitoring
 
 ## Assumptions
 
