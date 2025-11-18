@@ -1,0 +1,91 @@
+# Prometheus Configuration for Multi-Agent RAG Orchestrator v4.2
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'orchestrator'
+    environment: 'production'
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  # - "alerts/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # n8n orchestrator
+  - job_name: 'n8n'
+    static_configs:
+      - targets: ['n8n:5678']
+    metrics_path: '/metrics'
+
+  # Ollama LLM inference
+  - job_name: 'ollama'
+    static_configs:
+      - targets: ['ollama:11434']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Jan local LLM
+  - job_name: 'jan'
+    static_configs:
+      - targets: ['jan:1337']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # PostgreSQL (via postgres_exporter if available)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+    scrape_interval: 30s
+
+  # Redis (via redis_exporter if available)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 30s
+
+  # Qdrant vector database
+  - job_name: 'qdrant'
+    static_configs:
+      - targets: ['qdrant:6333']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # MCP servers
+  - job_name: 'mcp-filesystem'
+    static_configs:
+      - targets: ['mcp-filesystem:3001']
+    metrics_path: '/metrics'
+    scrape_interval: 60s
+
+  - job_name: 'mcp-git'
+    static_configs:
+      - targets: ['mcp-git:3002']
+    metrics_path: '/metrics'
+    scrape_interval: 60s
+
+  - job_name: 'mcp-memory'
+    static_configs:
+      - targets: ['mcp-memory:3003']
+    metrics_path: '/metrics'
+    scrape_interval: 60s
+
+  # FastAPI budget service (when exposed)
+  # - job_name: 'budget-api'
+  #   static_configs:
+  #     - targets: ['budget-api:8000']
+  #   metrics_path: '/metrics'
+  #   scrape_interval: 30s
