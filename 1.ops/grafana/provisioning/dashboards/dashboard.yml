@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: 'LLMOps Dashboards'
+    org_id: 1
+    folder: 'LLMOps'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true

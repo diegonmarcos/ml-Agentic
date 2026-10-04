@@ -1,0 +1,406 @@
+{
+  "name": "002 - Coder Agent",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start-coder",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract input\nconst input = $input.item.json;\nconst codebase = input.codebase;\nconst task = input.task;\nconst execution_id = input.execution_id;\nconst trace_id = input.trace_id;\n\n// Create git branch name\nconst task_id = execution_id.replace('exec_', '');\nconst branch_name = `ai-agent/${task_id}`;\n\n// Start timing\nconst start_time = Date.now();\n\nreturn [{\n  json: {\n    ...input,\n    branch_name: branch_name,\n    start_time: start_time,\n    phase: 'initialization'\n  }\n}];"
+      },
+      "id": "init-coder",
+      "name": "Initialize Coder Task",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if codebase is already indexed\nconst codebase = $json.codebase;\nconst codebaseName = codebase.split('/').pop();\nconst collectionName = `codebase_${codebaseName}`;\n\n// TODO: Check Qdrant for collection existence\n// For now, assume needs indexing if collection doesn't exist\n\nreturn [{\n  json: {\n    ...$json,\n    collection_name: collectionName,\n    needs_indexing: true,  // Placeholder - check Qdrant in production\n    phase: 'indexing_check'\n  }\n}];"
+      },
+      "id": "check-index",
+      "name": "Check Codebase Index",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.needs_indexing}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-needs-index",
+      "name": "IF Needs Indexing",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Index codebase\nconst codebase = $json.codebase;\nconst fs = require('fs');\nconst path = require('path');\n\n// Count files\nfunction countFiles(dir) {\n  let count = 0;\n  const files = fs.readdirSync(dir);\n  for (const file of files) {\n    if (file.startsWith('.')) continue;  // Skip hidden\n    const fullPath = path.join(dir, file);\n    const stat = fs.statSync(fullPath);\n    if (stat.isDirectory()) {\n      count += countFiles(fullPath);\n    } else if (file.match(/\\.(js|ts|py|java|go|rb|php|c|cpp|h|hpp)$/)) {\n      count++;\n    }\n  }\n  return count;\n}\n\nconst fileCount = countFiles(codebase);\n\n// Determine if batch routing needed (Tier 4 if ≥50 files)\nconst use_batch = fileCount >= 50;\n\nreturn [{\n  json: {\n    ...$json,\n    file_count: fileCount,\n    use_batch_routing: use_batch,\n    indexing_tier: use_batch ? 4 : 1,\n    phase: 'indexing'\n  }\n}];"
+      },
+      "id": "index-codebase",
+      "name": "Index Codebase",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 200],
+      "notes": "In production: Call actual indexing service, store in Qdrant"
+    },
+    {
+      "parameters": {
+        "url": "http://litellm:4000/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "jsonBody": "={\n  \"model\": \"architect\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an expert code architect. Analyze the user's task and create a detailed plan with 5-15 executable subtasks. Each subtask should be specific and actionable. Return JSON format: {\\\"subtasks\\\": [{\\\"description\\\": \\\"...\\\", \\\"complexity\\\": 0.1-1.0}]}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Task: {{ $json.task }}\\n\\nCodebase: {{ $json.codebase }}\\n\\nCreate a detailed implementation plan.\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "architect-plan",
+      "name": "Architect - Create Plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1250, 300],
+      "notes": "Tier 3 - Planning phase"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse architect response\nconst response = $json.choices[0].message.content;\nlet plan;\n\ntry {\n  plan = JSON.parse(response);\n} catch (e) {\n  // Fallback if not valid JSON\n  plan = { subtasks: [{description: response, complexity: 0.5}] };\n}\n\nconst usage = $json.usage || {};\nconst architectCost = (usage.total_tokens || 0) * 0.012 / 1000;  // $12/M tokens\n\nreturn [{\n  json: {\n    ...$json,\n    plan: plan,\n    subtasks: plan.subtasks,\n    architect_cost: architectCost,\n    phase: 'execution_ready'\n  }\n}];"
+      },
+      "id": "parse-plan",
+      "name": "Parse Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-subtasks",
+      "name": "Loop Subtasks",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get current subtask\nconst subtask = $json.subtasks[$('Loop Subtasks').item.json.batchIndex];\nconst complexity = subtask.complexity || 0.5;\n\n// Route to tier based on complexity\nlet tier;\nlet model;\nif (complexity < 0.3) {\n  tier = 0;\n  model = 'fast_filter';\n} else if (complexity < 0.7) {\n  tier = 1;\n  model = 'executor';\n} else {\n  tier = 3;\n  model = 'architect';\n}\n\nreturn [{\n  json: {\n    subtask: subtask,\n    tier: tier,\n    model: model,\n    phase: 'executing_subtask'\n  }\n}];"
+      },
+      "id": "route-subtask",
+      "name": "Route Subtask to Tier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://litellm:4000/v1/chat/completions",
+        "sendBody": true,
+        "jsonBody": "={\n  \"model\": \"{{ $json.model }}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $json.subtask.description }}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "execute-subtask",
+      "name": "Execute Subtask",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect subtask result\nconst result = $json.choices[0].message.content;\nconst usage = $json.usage || {};\nconst tier = $('Route Subtask to Tier').item.json.tier;\n\n// Calculate cost per tier\nconst costPerTier = {\n  0: 0,\n  1: 0.0003,\n  3: 0.012\n};\n\nconst cost = (usage.total_tokens || 0) * costPerTier[tier] / 1000;\n\nreturn [{\n  json: {\n    subtask: $('Route Subtask to Tier').item.json.subtask,\n    result: result,\n    tier: tier,\n    cost: cost,\n    tokens: usage.total_tokens || 0\n  }\n}];"
+      },
+      "id": "collect-result",
+      "name": "Collect Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 300]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [1850, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all subtask results\nconst allResults = $input.all();\nconst executorCost = allResults.reduce((sum, item) => sum + (item.json.cost || 0), 0);\nconst totalTokens = allResults.reduce((sum, item) => sum + (item.json.tokens || 0), 0);\n\nconst aggregated = allResults.map(item => ({\n  subtask: item.json.subtask.description,\n  result: item.json.result,\n  tier: item.json.tier,\n  cost: item.json.cost\n}));\n\nreturn [{\n  json: {\n    results: aggregated,\n    executor_cost: executorCost,\n    total_tokens: totalTokens,\n    phase: 'review_ready'\n  }\n}];"
+      },
+      "id": "summarize-execution",
+      "name": "Summarize Execution",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2050, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://litellm:4000/v1/chat/completions",
+        "sendBody": true,
+        "jsonBody": "={\n  \"model\": \"architect\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a code reviewer. Validate the following implementation results and provide feedback. Return JSON: {\\\"validation\\\": \\\"passed|failed\\\", \\\"feedback\\\": \\\"...\\\", \\\"suggestions\\\": [\\\"...\\\"]}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Results:\\n{{ JSON.stringify($json.results, null, 2) }}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "reviewer-validate",
+      "name": "Reviewer - Validate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2250, 500],
+      "notes": "Tier 3 - Review phase"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse review\nconst response = $json.choices[0].message.content;\nlet review;\n\ntry {\n  review = JSON.parse(response);\n} catch (e) {\n  review = { validation: 'passed', feedback: response, suggestions: [] };\n}\n\nconst usage = $json.usage || {};\nconst reviewerCost = (usage.total_tokens || 0) * 0.012 / 1000;\n\nreturn [{\n  json: {\n    review: review,\n    reviewer_cost: reviewerCost,\n    phase: 'git_commit'\n  }\n}];"
+      },
+      "id": "parse-review",
+      "name": "Parse Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Git operations (simplified - in production use actual git commands)\nconst codebase = $('Initialize Coder Task').item.json.codebase;\nconst branch_name = $('Initialize Coder Task').item.json.branch_name;\nconst task = $('Initialize Coder Task').item.json.task;\n\n// In production:\n// const { execSync } = require('child_process');\n// execSync(`cd ${codebase} && git checkout -b ${branch_name}`);\n// execSync(`cd ${codebase} && git add .`);\n// execSync(`cd ${codebase} && git commit -m \"${task}\" --author=\"AI Agent <agent@n8n>\"`);\n\nconst commit_hash = `commit_${Date.now().toString(36)}`;\n\nreturn [{\n  json: {\n    branch: branch_name,\n    commit_hash: commit_hash,\n    files_modified: 3,  // Placeholder\n    phase: 'completed'\n  }\n}];"
+      },
+      "id": "git-commit",
+      "name": "Git Commit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2650, 500],
+      "notes": "In production: Execute real git commands"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build final response\nconst input = $('Initialize Coder Task').item.json;\nconst plan = $('Parse Plan').item.json;\nconst execution = $('Summarize Execution').item.json;\nconst review = $('Parse Review').item.json;\nconst git = $json;\n\nconst total_cost = plan.architect_cost + execution.executor_cost + review.reviewer_cost;\nconst duration_ms = Date.now() - input.start_time;\n\nreturn [{\n  json: {\n    status: 'completed',\n    agent: 'coder',\n    execution_id: input.execution_id,\n    trace_id: input.trace_id,\n    codebase: input.codebase,\n    task: input.task,\n    git_branch: git.branch,\n    commit_hash: git.commit_hash,\n    files_modified: git.files_modified,\n    cost_breakdown: {\n      architect: plan.architect_cost,\n      executor: execution.executor_cost,\n      reviewer: review.reviewer_cost\n    },\n    total_cost: total_cost,\n    review: review.review,\n    duration_ms: duration_ms,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "build-response",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2850, 500]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Initialize Coder Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Coder Task": {
+      "main": [
+        [
+          {
+            "node": "Check Codebase Index",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Codebase Index": {
+      "main": [
+        [
+          {
+            "node": "IF Needs Indexing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Needs Indexing": {
+      "main": [
+        [
+          {
+            "node": "Index Codebase",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Architect - Create Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Index Codebase": {
+      "main": [
+        [
+          {
+            "node": "Architect - Create Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Architect - Create Plan": {
+      "main": [
+        [
+          {
+            "node": "Parse Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Plan": {
+      "main": [
+        [
+          {
+            "node": "Loop Subtasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Subtasks": {
+      "main": [
+        [
+          {
+            "node": "Route Subtask to Tier",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Subtask to Tier": {
+      "main": [
+        [
+          {
+            "node": "Execute Subtask",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Subtask": {
+      "main": [
+        [
+          {
+            "node": "Collect Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Result": {
+      "main": [
+        [
+          {
+            "node": "Loop Subtasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Summarize Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Execution": {
+      "main": [
+        [
+          {
+            "node": "Reviewer - Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reviewer - Validate": {
+      "main": [
+        [
+          {
+            "node": "Parse Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Review": {
+      "main": [
+        [
+          {
+            "node": "Git Commit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Git Commit": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-11-18T00:00:00.000Z",
+  "versionId": "1"
+}

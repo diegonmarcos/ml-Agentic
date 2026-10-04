@@ -1,0 +1,423 @@
+{
+  "name": "003 - Web Agent",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start-web",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract input\nconst input = $input.item.json;\nconst target_url = input.target_url;\nconst task = input.task;\nconst execution_id = input.execution_id;\nconst trace_id = input.trace_id;\nconst headless = input.options?.headless !== false;\n\n// Start timing\nconst start_time = Date.now();\n\nreturn [{\n  json: {\n    ...input,\n    start_time: start_time,\n    headless: headless,\n    phase: 'initialization'\n  }\n}];"
+      },
+      "id": "init-web",
+      "name": "Initialize Web Task",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://litellm:4000/v1/chat/completions",
+        "sendBody": true,
+        "jsonBody": "={\n  \"model\": \"architect\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a web automation architect. Create a detailed plan for web automation/scraping tasks with 3-10 steps. Return JSON: {\\\"steps\\\": [{\\\"action\\\": \\\"navigate|extract|click|fill|screenshot\\\", \\\"description\\\": \\\"...\\\", \\\"target\\\": \\\"...\\\"}]}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Task: {{ $json.task }}\\n\\nTarget URL: {{ $json.target_url }}\\n\\nCreate a web automation plan.\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "architect-web-plan",
+      "name": "Architect - Web Plan",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 300],
+      "notes": "Tier 3 - Planning"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse architect response\nconst response = $json.choices[0].message.content;\nlet plan;\n\ntry {\n  plan = JSON.parse(response);\n} catch (e) {\n  plan = { steps: [{action: 'navigate', description: 'Navigate to target', target: $('Initialize Web Task').item.json.target_url}] };\n}\n\nconst usage = $json.usage || {};\nconst architectCost = (usage.total_tokens || 0) * 0.012 / 1000;\n\nreturn [{\n  json: {\n    plan: plan,\n    steps: plan.steps,\n    architect_cost: architectCost,\n    phase: 'browser_start'\n  }\n}];"
+      },
+      "id": "parse-web-plan",
+      "name": "Parse Web Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://playwright:3000/navigate",
+        "sendBody": true,
+        "jsonBody": "={\n  \"url\": \"{{ $('Initialize Web Task').item.json.target_url }}\",\n  \"waitFor\": \"networkidle\",\n  \"screenshot\": true,\n  \"headless\": {{ $('Initialize Web Task').item.json.headless }}\n}",
+        "options": {}
+      },
+      "id": "navigate-page",
+      "name": "Navigate to Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 300],
+      "notes": "Start browser session and navigate"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Store session ID and initial page info\nconst response = $json;\n\nif (!response.success) {\n  throw new Error(`Navigation failed: ${response.error}`);\n}\n\nreturn [{\n  json: {\n    session_id: response.sessionId,\n    initial_url: response.url,\n    page_title: response.title,\n    screenshots: [response.screenshot],\n    pages_visited: [response.url],\n    phase: 'execution'\n  }\n}];"
+      },
+      "id": "store-session",
+      "name": "Store Session Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-steps",
+      "name": "Loop Web Steps",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get current step\nconst step = $('Parse Web Plan').item.json.steps[$('Loop Web Steps').item.json.batchIndex];\nconst session_id = $('Store Session Info').item.json.session_id;\n\nreturn [{\n  json: {\n    step: step,\n    session_id: session_id,\n    phase: 'executing_step'\n  }\n}];"
+      },
+      "id": "get-step",
+      "name": "Get Current Step",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.step.action}}",
+              "operation": "equals",
+              "value2": "extract"
+            }
+          ]
+        }
+      },
+      "id": "if-extract",
+      "name": "IF Extract Action",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1850, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://playwright:3000/extract",
+        "sendBody": true,
+        "jsonBody": "={\n  \"sessionId\": \"{{ $json.session_id }}\",\n  \"extractType\": \"structured\"\n}",
+        "options": {}
+      },
+      "id": "extract-content",
+      "name": "Extract Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2050, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://playwright:3000/screenshot",
+        "sendBody": true,
+        "jsonBody": "={\n  \"sessionId\": \"{{ $json.session_id }}\"\n}",
+        "options": {}
+      },
+      "id": "take-screenshot",
+      "name": "Take Screenshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2050, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect step result\nconst step = $('Get Current Step').item.json.step;\nconst result = $json;\n\nreturn [{\n  json: {\n    step: step.description,\n    action: step.action,\n    result: result,\n    success: result.success || false\n  }\n}];"
+      },
+      "id": "collect-step-result",
+      "name": "Collect Step Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 300]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "aggregate-web-results",
+      "name": "Aggregate Web Results",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [1650, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all web step results\nconst allResults = $input.all();\nconst session_id = $('Store Session Info').item.json.session_id;\n\nconst aggregated = allResults.map(item => ({\n  step: item.json.step,\n  action: item.json.action,\n  success: item.json.success\n}));\n\n// Extract all content\nconst extractedContent = allResults\n  .filter(item => item.json.action === 'extract')\n  .map(item => item.json.result.content)\n  .join('\\n\\n');\n\nreturn [{\n  json: {\n    session_id: session_id,\n    steps_completed: aggregated,\n    extracted_content: extractedContent,\n    phase: 'analysis'\n  }\n}];"
+      },
+      "id": "summarize-web",
+      "name": "Summarize Web Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://litellm:4000/v1/chat/completions",
+        "sendBody": true,
+        "jsonBody": "={\n  \"model\": \"executor\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Generate a concise research report from the extracted web content. Use markdown format with headings, bullet points, and structured data.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Task: {{ $('Initialize Web Task').item.json.task }}\\n\\nExtracted Content:\\n{{ $json.extracted_content }}\\n\\nGenerate a report.\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "generate-report",
+      "name": "Generate Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2050, 500],
+      "notes": "Tier 1 - Report generation"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse report\nconst response = $json.choices[0].message.content;\nconst usage = $json.usage || {};\nconst executorCost = (usage.total_tokens || 0) * 0.0003 / 1000;\n\n// Save report to file\nconst fs = require('fs');\nconst path = require('path');\nconst execution_id = $('Initialize Web Task').item.json.execution_id;\nconst timestamp = new Date().toISOString().split('T')[0];\nconst reportDir = './research';\nconst reportPath = path.join(reportDir, `web-research-${timestamp}-${execution_id}.md`);\n\n// Create directory if doesn't exist\nif (!fs.existsSync(reportDir)) {\n  fs.mkdirSync(reportDir, { recursive: true });\n}\n\n// Write report\nfs.writeFileSync(reportPath, response);\n\nreturn [{\n  json: {\n    report: response,\n    report_path: reportPath,\n    executor_cost: executorCost,\n    phase: 'cleanup'\n  }\n}];"
+      },
+      "id": "save-report",
+      "name": "Save Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://playwright:3000/close",
+        "sendBody": true,
+        "jsonBody": "={\n  \"sessionId\": \"{{ $('Summarize Web Results').item.json.session_id }}\"\n}",
+        "options": {}
+      },
+      "id": "close-browser",
+      "name": "Close Browser",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2450, 500],
+      "notes": "MANDATORY cleanup"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build final response\nconst input = $('Initialize Web Task').item.json;\nconst plan = $('Parse Web Plan').item.json;\nconst session = $('Store Session Info').item.json;\nconst report = $('Save Report').item.json;\n\nconst total_cost = plan.architect_cost + report.executor_cost;\nconst duration_ms = Date.now() - input.start_time;\n\nreturn [{\n  json: {\n    status: 'completed',\n    agent: 'web',\n    execution_id: input.execution_id,\n    trace_id: input.trace_id,\n    target_url: input.target_url,\n    task: input.task,\n    report_path: report.report_path,\n    pages_visited: session.pages_visited,\n    screenshots: session.screenshots,\n    cost_breakdown: {\n      architect: plan.architect_cost,\n      executor: report.executor_cost,\n      vision: 0  // Placeholder - add if vision used\n    },\n    total_cost: total_cost,\n    duration_ms: duration_ms,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "build-web-response",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2650, 500]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Initialize Web Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Web Task": {
+      "main": [
+        [
+          {
+            "node": "Architect - Web Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Architect - Web Plan": {
+      "main": [
+        [
+          {
+            "node": "Parse Web Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Web Plan": {
+      "main": [
+        [
+          {
+            "node": "Navigate to Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Navigate to Page": {
+      "main": [
+        [
+          {
+            "node": "Store Session Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Session Info": {
+      "main": [
+        [
+          {
+            "node": "Loop Web Steps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Web Steps": {
+      "main": [
+        [
+          {
+            "node": "Get Current Step",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Web Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Current Step": {
+      "main": [
+        [
+          {
+            "node": "IF Extract Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Extract Action": {
+      "main": [
+        [
+          {
+            "node": "Extract Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Take Screenshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Content": {
+      "main": [
+        [
+          {
+            "node": "Collect Step Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Take Screenshot": {
+      "main": [
+        [
+          {
+            "node": "Collect Step Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Step Result": {
+      "main": [
+        [
+          {
+            "node": "Loop Web Steps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Web Results": {
+      "main": [
+        [
+          {
+            "node": "Summarize Web Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Web Results": {
+      "main": [
+        [
+          {
+            "node": "Generate Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Report": {
+      "main": [
+        [
+          {
+            "node": "Save Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Report": {
+      "main": [
+        [
+          {
+            "node": "Close Browser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Close Browser": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-11-18T00:00:00.000Z",
+  "versionId": "1"
+}

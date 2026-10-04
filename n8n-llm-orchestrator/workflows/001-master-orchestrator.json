@@ -1,0 +1,201 @@
+{
+  "name": "001 - Master Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-agent",
+      "name": "Webhook - Agent Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "agent-orchestrator"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and validate request\nconst body = $input.item.json.body;\n\n// Extract fields\nconst agent = body.agent;\nconst codebase = body.codebase;\nconst target_url = body.target_url;\nconst task = body.task;\nconst options = body.options || {};\n\n// Validation\nif (!agent || !task) {\n  return [{\n    json: {\n      status: 'error',\n      error: 'Missing required fields: agent and task'\n    }\n  }];\n}\n\nif (agent !== 'coder' && agent !== 'web') {\n  return [{\n    json: {\n      status: 'error',\n      error: `Invalid agent type: ${agent}. Must be 'coder' or 'web'`\n    }\n  }];\n}\n\n// Validate agent-specific requirements\nif (agent === 'coder' && !codebase) {\n  return [{\n    json: {\n      status: 'error',\n      error: 'Coder agent requires codebase path'\n    }\n  }];\n}\n\nif (agent === 'web' && !target_url) {\n  return [{\n    json: {\n      status: 'error',\n      error: 'Web agent requires target_url'\n    }\n  }];\n}\n\n// Generate execution ID\nconst execution_id = `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;\nconst trace_id = `trace_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;\n\nreturn [{\n  json: {\n    valid: true,\n    agent: agent,\n    codebase: codebase,\n    target_url: target_url,\n    task: task,\n    options: options,\n    execution_id: execution_id,\n    trace_id: trace_id,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "parse-request",
+      "name": "Parse & Validate Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.valid}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-valid",
+      "name": "IF Valid Request",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.agent}}",
+              "operation": "equals",
+              "value2": "coder"
+            }
+          ]
+        }
+      },
+      "id": "if-coder",
+      "name": "IF Coder Agent",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "workflowId": "={{ $workflow.id }}",
+        "options": {}
+      },
+      "id": "execute-coder",
+      "name": "Execute Coder Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1050, 100],
+      "notes": "Replace with actual Coder Agent workflow ID"
+    },
+    {
+      "parameters": {
+        "workflowId": "={{ $workflow.id }}",
+        "options": {}
+      },
+      "id": "execute-web",
+      "name": "Execute Web Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1050, 300],
+      "notes": "Replace with actual Web Agent workflow ID"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "respond-success",
+      "name": "Respond - Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "respond-error",
+      "name": "Respond - Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [850, 400]
+    }
+  ],
+  "connections": {
+    "Webhook - Agent Request": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate Request": {
+      "main": [
+        [
+          {
+            "node": "IF Valid Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Valid Request": {
+      "main": [
+        [
+          {
+            "node": "IF Coder Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Coder Agent": {
+      "main": [
+        [
+          {
+            "node": "Execute Coder Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute Web Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Coder Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Web Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-11-18T00:00:00.000Z",
+  "versionId": "1"
+}

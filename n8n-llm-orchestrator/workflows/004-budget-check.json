@@ -1,0 +1,206 @@
+{
+  "name": "004 - Budget Check",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start-budget",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract input parameters\nconst input = $input.item.json;\nconst tier = input.tier;  // 0, 1, 2, 3, 4\nconst estimated_tokens = input.estimated_tokens || 1000;\nconst operation_type = input.operation_type || 'single';  // single | batch\nconst batch_size = input.batch_size || 1;\n\n// Map tier to budget pool\nconst tierToPool = {\n  0: 'local_vps',\n  1: 'per_token',\n  2: 'local_vps',\n  3: 'premium',\n  4: 'hourly_vram'\n};\n\nconst pool = tierToPool[tier];\n\nif (!pool) {\n  return [{\n    json: {\n      status: 'error',\n      error: `Invalid tier: ${tier}`,\n      pass: false\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    tier: tier,\n    pool: pool,\n    estimated_tokens: estimated_tokens,\n    operation_type: operation_type,\n    batch_size: batch_size,\n    phase: 'fetch_balance'\n  }\n}];\n"
+      },
+      "id": "parse-budget-request",
+      "name": "Parse Budget Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// PLACEHOLDER: In production, fetch from Redis\n// const redis = require('redis');\n// const client = redis.createClient({url: 'redis://redis:6379'});\n// await client.connect();\n// const balance = await client.get(`budget_pool:${pool}`);\n// await client.disconnect();\n\nconst pool = $json.pool;\n\n// Budget pool limits (monthly)\nconst poolLimits = {\n  'hourly_vram': 100.00,   // $100/month for Tier 4\n  'per_token': 50.00,      // $50/month for Tier 1\n  'premium': 50.00,        // $50/month for Tier 3\n  'local_vps': 75.00       // $75/month for Tier 0/2\n};\n\n// Simulated current balances (in production, from Redis)\nconst simulatedBalances = {\n  'hourly_vram': 85.00,\n  'per_token': 42.50,\n  'premium': 38.75,\n  'local_vps': 75.00  // Fixed cost, always \"available\"\n};\n\nconst limit = poolLimits[pool];\nconst balance = simulatedBalances[pool];\n\nreturn [{\n  json: {\n    pool: pool,\n    limit: limit,\n    balance: balance,\n    used: limit - balance,\n    utilization: ((limit - balance) / limit * 100).toFixed(2) + '%',\n    phase: 'calculate_cost'\n  }\n}];\n"
+      },
+      "id": "fetch-pool-balance",
+      "name": "Fetch Pool Balance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "notes": "In production: Query Redis for real-time balance"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate estimated cost based on tier\nconst tier = $('Parse Budget Request').item.json.tier;\nconst estimated_tokens = $('Parse Budget Request').item.json.estimated_tokens;\nconst operation_type = $('Parse Budget Request').item.json.operation_type;\nconst batch_size = $('Parse Budget Request').item.json.batch_size;\n\n// Cost per 1M tokens (input + output averaged)\nconst tierCosts = {\n  0: 0,           // Tier 0 - Free (local Ollama)\n  1: 0.0005,      // Tier 1 - Fireworks/Together (~$0.50/M tokens)\n  2: 0,           // Tier 2 - Free (local Ollama Vision on VPS)\n  3: 0.012,       // Tier 3 - Claude/Gemini (~$12/M tokens)\n  4: 0.69         // Tier 4 - GPU rental ($0.69/hour, amortized)\n};\n\nlet estimated_cost;\n\nif (tier === 4) {\n  // Tier 4: Hourly GPU rental\n  // Estimate: batch_size ops at 100 ops/hour = batch_size/100 hours\n  const estimated_hours = Math.max(0.083, batch_size / 100);  // Min 5 min = 0.083 hr\n  estimated_cost = estimated_hours * tierCosts[4];\n} else if (tier === 0 || tier === 2) {\n  // Tier 0/2: Free (local)\n  estimated_cost = 0;\n} else {\n  // Tier 1/3: Per-token pricing\n  estimated_cost = (estimated_tokens / 1000000) * tierCosts[tier];\n  \n  // Multiply by batch size if batch operation\n  if (operation_type === 'batch') {\n    estimated_cost *= batch_size;\n  }\n}\n\n// Add 20% buffer for safety\nconst buffered_cost = estimated_cost * 1.2;\n\nreturn [{\n  json: {\n    estimated_cost: parseFloat(estimated_cost.toFixed(6)),\n    buffered_cost: parseFloat(buffered_cost.toFixed(6)),\n    cost_per_token: tierCosts[tier],\n    phase: 'check_budget'\n  }\n}];\n"
+      },
+      "id": "calculate-estimated-cost",
+      "name": "Calculate Estimated Cost",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if budget is sufficient\nconst balance = $('Fetch Pool Balance').item.json.balance;\nconst buffered_cost = $('Calculate Estimated Cost').item.json.buffered_cost;\nconst pool = $('Fetch Pool Balance').item.json.pool;\nconst tier = $('Parse Budget Request').item.json.tier;\n\n// Tier 0/2 always pass (local, no cost)\nif (tier === 0 || tier === 2) {\n  return [{\n    json: {\n      pass: true,\n      reason: 'Local tier - no budget check required',\n      pool: pool,\n      balance: balance,\n      estimated_cost: 0,\n      status: 'approved'\n    }\n  }];\n}\n\n// Check if sufficient balance\nconst pass = balance >= buffered_cost;\n\nif (pass) {\n  return [{\n    json: {\n      pass: true,\n      reason: 'Sufficient budget available',\n      pool: pool,\n      balance: balance,\n      estimated_cost: buffered_cost,\n      remaining_after: parseFloat((balance - buffered_cost).toFixed(6)),\n      status: 'approved'\n    }\n  }];\n} else {\n  return [{\n    json: {\n      pass: false,\n      reason: 'Insufficient budget',\n      pool: pool,\n      balance: balance,\n      estimated_cost: buffered_cost,\n      shortfall: parseFloat((buffered_cost - balance).toFixed(6)),\n      status: 'rejected',\n      error: `Budget exhausted: ${pool} pool has $${balance.toFixed(2)}, needs $${buffered_cost.toFixed(2)}`\n    }\n  }];\n}\n"
+      },
+      "id": "check-budget-sufficient",
+      "name": "Check Budget Sufficient",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.pass}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-budget-approved",
+      "name": "IF Budget Approved",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// PLACEHOLDER: In production, reserve budget in Redis\n// const redis = require('redis');\n// const client = redis.createClient({url: 'redis://redis:6379'});\n// await client.connect();\n// await client.decrByFloat(`budget_pool:${pool}`, estimated_cost);\n// await client.set(`reservation:${execution_id}`, JSON.stringify({pool, cost: estimated_cost, timestamp: Date.now()}));\n// await client.disconnect();\n\nconst input = $('Check Budget Sufficient').item.json;\nconst execution_id = $('Parse Budget Request').item.json.execution_id || `exec_${Date.now()}`;\n\nreturn [{\n  json: {\n    status: 'reserved',\n    pass: true,\n    pool: input.pool,\n    reserved_amount: input.estimated_cost,\n    balance_before: input.balance,\n    balance_after: input.remaining_after,\n    execution_id: execution_id,\n    timestamp: new Date().toISOString()\n  }\n}];\n"
+      },
+      "id": "reserve-budget",
+      "name": "Reserve Budget",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 200],
+      "notes": "In production: Atomic decrement in Redis"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build rejection response\nconst input = $('Check Budget Sufficient').item.json;\n\nreturn [{\n  json: {\n    status: 'rejected',\n    pass: false,\n    pool: input.pool,\n    balance: input.balance,\n    estimated_cost: input.estimated_cost,\n    shortfall: input.shortfall,\n    error: input.error,\n    timestamp: new Date().toISOString(),\n    action_required: 'Increase budget pool limit or wait for monthly reset'\n  }\n}];\n"
+      },
+      "id": "build-rejection",
+      "name": "Build Rejection Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 400]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition"
+      },
+      "id": "merge-responses",
+      "name": "Merge Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [1650, 300]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Parse Budget Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Budget Request": {
+      "main": [
+        [
+          {
+            "node": "Fetch Pool Balance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Pool Balance": {
+      "main": [
+        [
+          {
+            "node": "Calculate Estimated Cost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Estimated Cost": {
+      "main": [
+        [
+          {
+            "node": "Check Budget Sufficient",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Budget Sufficient": {
+      "main": [
+        [
+          {
+            "node": "IF Budget Approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Budget Approved": {
+      "main": [
+        [
+          {
+            "node": "Reserve Budget",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Rejection Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reserve Budget": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Rejection Response": {
+      "main": [
+        [
+          {
+            "node": "Merge Responses",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-11-18T00:00:00.000Z",
+  "versionId": "1"
+}
